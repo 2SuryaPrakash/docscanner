@@ -1,6 +1,6 @@
 # 📄 DocScanner
 
-A computer-vision-powered document scanner that detects page boundaries, applies perspective correction, and enhances scanned output — all from a photo taken on any background.
+A computer-vision-powered document scanner that detects page boundaries, applies perspective correction, and enhances scanned output.
 
 Available as a **Streamlit web app** (with live camera capture) and a **command-line interface** for scripting and batch processing.
 
