@@ -1,5 +1,5 @@
 """
-app.py — Streamlit UI for DocScan Pro.
+app.py — Streamlit UI for DocScanner..
 All CV logic lives in scanner.py.
 
 Run:  streamlit run app.py
@@ -30,7 +30,7 @@ from scanner import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="DocScan Pro",
+    page_title="DocScanner",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -506,7 +506,7 @@ def _build_camera_html(bridge_label: str) -> str:
     <canvas id="snap"></canvas>
     <div id="controls" style="display:flex;gap:8px;margin-top:8px;justify-content:center;">
       <button class="cam-btn" id="retake">↩ Retake</button>
-      <button class="cam-btn" id="use-photo">✅ Use This Photo</button>
+      <button class="cam-btn" id="use-photo">Use This Photo</button>
     </div>
   </div>
   <div id="status">Initialising camera…</div>
@@ -667,14 +667,13 @@ def reset_corners(file_key: str, new_corners: np.ndarray) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## 📄 DocScan Pro")
-    st.caption("CamScanner-quality scanning · OpenCV + Streamlit")
+    st.markdown("## 📄 DocScanner")
     st.divider()
 
     input_source = st.radio(
         "📥 Input Source",
         ["📁 Upload File", "📷 Camera"],
-        index=0,
+        index=1,
         horizontal=True,
         help="Choose to upload an existing photo or capture one with your camera.",
     )
@@ -709,7 +708,7 @@ with st.sidebar:
     st.divider()
 
     filter_name = st.radio(
-        "🎨 Enhancement Filter",
+        "Enhancement Filter",
         options=list(FILTERS.keys()),
         index=0,
         help=(
@@ -725,17 +724,16 @@ with st.sidebar:
     st.divider()
 
     corner_mode = st.radio(
-        "🎯 Corner Mode",
+        "Corner Selection",
         ["Auto", "Manual (drag)"],
-        index=0,
+        index=1,
         help=(
-            "**Auto** — AI detects the document corners.  \n"
+            "**Auto** — Auto corner detection.  \n"
             "**Manual** — drag the coloured dots on the canvas to fine-tune."
         ),
     )
 
     st.divider()
-    st.caption("OpenCV · Streamlit · NumPy · Pillow")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Resolve image_bytes from upload or camera
@@ -759,21 +757,17 @@ elif camera_data is not None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if image_bytes is None:
-    st.markdown("# 📄 DocScan Pro")
+    st.markdown("# 📄 DocScanner")
     st.markdown("""
     ### Upload a photo or capture one with your camera to begin.
 
-    | Feature | Implementation |
+    | Features ||
     |---|---|
-    | 💡 Illumination normalisation | CLAHE on L-channel in LAB space |
-    | 🔬 Hybrid edge detection | Bilateral-Canny → colour-seg → morph-gradient |
-    | 📐 Corner detection | Convex hull + approxPolyDP sweep + rectangularity score |
-    | 🖼 Full-res warp | Corners detected on thumbnail; warp runs on original |
-    | ✋ Draggable corners | HTML5 canvas — drag the coloured dots to adjust |
-    | 📷 Camera capture | Front & back camera with live viewfinder |
-    | 🎨 6 filters | Original / Magic Colour / B&W / Grayscale / Sketch / Shadow |
-    | ⚡ Speed | < 2 s on a standard laptop CPU |
-    | 💾 Download | Full-resolution PNG |
+    | Illumination normalisation | CLAHE on L-channel in LAB space |
+    | Hybrid edge detection | Bilateral-Canny → colour-seg → morph-gradient |
+    | Corner detection | Convex hull + approxPolyDP sweep + rectangularity score |
+    | Full-res warp | Corners detected on thumbnail; warp runs on original |
+    | 6 filters | Original / Magic Colour / B&W / Grayscale / Sketch / Shadow |
     """)
     st.stop()
 
@@ -849,7 +843,7 @@ else:
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.divider()
-st.markdown("### 🔬 Pipeline Stages")
+st.markdown("### Pipeline Stages")
 
 r1a, r1b, r1c = st.columns(3)
 with r1a:
@@ -880,7 +874,7 @@ with r2c:
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.divider()
-st.markdown("### 💾 Final Scan")
+st.markdown("### Final Scan")
 
 out_col, info_col = st.columns([3, 2])
 
@@ -928,9 +922,9 @@ with info_col:
                  f'font-family:ui-monospace,monospace;">'
                  f'<span>{label}</span><span>{bar}<b>{ms:.1f} ms</b></span></div>')
 
-    speed_ok  = total < 2000
+    speed_ok  = total < 1000
     speed_col = "#00c9a7" if speed_ok else "#e53935"
-    speed_txt = "✓ under 2 s" if speed_ok else "✗ over 2 s"
+    speed_txt = "✓ under 1 s" if speed_ok else "✗ over 1 s"
     st.markdown(
         f'<div style="border:1px solid #2a2a2a;border-radius:8px;padding:12px;">'
         f'{rows}'
@@ -942,28 +936,28 @@ with info_col:
 
     st.markdown("&nbsp;", unsafe_allow_html=True)
 
-    # Stage status
-    st.markdown("#### ✅ Stage Status")
-    ok_map = stages.get("ok", {})
-    status_labels = {
-        "decode":        "Decode",   "resize":        "Resize",
-        "clahe":         "CLAHE",    "shadow_remove": "Shadow Rm",
-        "detection":     "Detection",
-        "warp":          "Warp",     "enhance":       "Filter",
-    }
-    flags = ""
-    for key, label in status_labels.items():
-        good  = ok_map.get(key, True)
-        badge = '<span class="ok-pill">✓ OK</span>' if good \
-                else '<span class="warn-pill">⚠ fallback</span>'
-        flags += (f'<div style="display:flex;justify-content:space-between;'
-                  f'padding:3px 0;border-bottom:1px solid #1e1e1e;font-size:.82rem;">'
-                  f'<span>{label}</span>{badge}</div>')
-    st.markdown(
-        f'<div style="border:1px solid #2a2a2a;border-radius:8px;padding:10px;">'
-        f'{flags}</div>',
-        unsafe_allow_html=True,
-    )
+    # # Stage status
+    # st.markdown("#### Stage Status")
+    # ok_map = stages.get("ok", {})
+    # status_labels = {
+    #     "decode":        "Decode",   "resize":        "Resize",
+    #     "clahe":         "CLAHE",    "shadow_remove": "Shadow Rm",
+    #     "detection":     "Detection",
+    #     "warp":          "Warp",     "enhance":       "Filter",
+    # }
+    # flags = ""
+    # for key, label in status_labels.items():
+    #     good  = ok_map.get(key, True)
+    #     badge = '<span class="ok-pill">✓ OK</span>' if good \
+    #             else '<span class="warn-pill">⚠ fallback</span>'
+    #     flags += (f'<div style="display:flex;justify-content:space-between;'
+    #               f'padding:3px 0;border-bottom:1px solid #1e1e1e;font-size:.82rem;">'
+    #               f'<span>{label}</span>{badge}</div>')
+    # st.markdown(
+    #     f'<div style="border:1px solid #2a2a2a;border-radius:8px;padding:10px;">'
+    #     f'{flags}</div>',
+    #     unsafe_allow_html=True,
+    # )
 
     # Active corner method info
     cm = stages.get("corner_method", "—")
