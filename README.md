@@ -66,6 +66,9 @@ openssl req -x509 -newkey rsa:2048 \
   -keyout key.pem -out cert.pem \
   -days 365 -nodes -subj '/CN=localhost'
 
+# Open port 8501 on your firewall to access the app from a different device on the same network
+sudo ufw allow 8501
+
 # Run with HTTPS
 streamlit run app.py \
   --server.sslCertFile=cert.pem \
