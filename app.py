@@ -48,6 +48,12 @@ div[data-testid="stDownloadButton"] > button {
     color:#fff !important; font-weight:700 !important;
     border:none !important; border-radius:8px !important;
 }
+/* Hide the JS↔Python bridge text inputs entirely */
+div:has(> div > input[aria-label="__docscan_corners__"]),
+div:has(> div > input[aria-label="__docscan_camera__"]) {
+    position:fixed !important; left:-9999px !important; top:-9999px !important;
+    opacity:0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -107,6 +113,9 @@ def cached_auto_pipeline(fhash: str, image_bytes: bytes, filter_name: str) -> di
 # This label is the aria-label of the hidden Streamlit text_input that
 # bridges the JS canvas drag events back to Python.
 _BRIDGE_LABEL = "__docscan_corners__"
+
+# Bridge label for the camera capture component.
+_CAMERA_BRIDGE_LABEL = "__docscan_camera__"
 
 
 def _build_canvas_html(img_b64: str, corners_proc: np.ndarray,
@@ -329,7 +338,10 @@ function pushToStreamlit() {{
           HTMLInputElement.prototype, 'value'
         ).set;
         nativeSetter.call(inp, payload);
+        inp.focus();
         inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        inp.blur();
         return;
       }}
     }}
@@ -341,7 +353,10 @@ function pushToStreamlit() {{
           HTMLInputElement.prototype, 'value'
         ).set;
         nativeSetter.call(inp, payload);
+        inp.focus();
         inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        inp.blur();
         return;
       }}
     }}
@@ -421,6 +436,218 @@ def draggable_corner_editor(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Camera capture component
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_camera_html(bridge_label: str) -> str:
+    """Return self-contained HTML for a camera capture widget with front/back toggle."""
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ background:transparent; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }}
+  #cam-wrap {{
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    padding:8px;
+  }}
+  video, canvas {{ border-radius:10px; max-width:100%; background:#111; }}
+  #controls {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }}
+  .cam-btn {{
+    border:none; border-radius:8px; padding:10px 20px;
+    font-weight:700; font-size:.85rem; cursor:pointer;
+    transition:transform .1s, box-shadow .15s;
+  }}
+  .cam-btn:active {{ transform:scale(.96); }}
+  #shutter {{
+    background:linear-gradient(135deg,#ff453a,#ff6b6b);
+    color:#fff; font-size:1rem; padding:12px 28px; border-radius:50px;
+    box-shadow:0 4px 15px rgba(255,69,58,.4);
+  }}
+  #shutter:hover {{ box-shadow:0 6px 20px rgba(255,69,58,.55); }}
+  #shutter:disabled {{ opacity:.4; cursor:not-allowed; }}
+  #flip {{
+    background:linear-gradient(135deg,#0a84ff,#409cff);
+    color:#fff; border-radius:50px; padding:10px 18px;
+    box-shadow:0 3px 12px rgba(10,132,255,.3);
+  }}
+  #flip:hover {{ box-shadow:0 5px 16px rgba(10,132,255,.45); }}
+  #status {{
+    font-size:.78rem; color:#aaa; text-align:center;
+    min-height:1.4em;
+  }}
+  #preview-wrap {{
+    display:none; position:relative;
+  }}
+  #preview-wrap canvas {{ box-shadow:0 2px 12px rgba(0,0,0,.45); }}
+  #retake {{
+    background:linear-gradient(135deg,#30d158,#34c759);
+    color:#fff; border-radius:50px; padding:10px 18px;
+    box-shadow:0 3px 12px rgba(48,209,88,.3);
+  }}
+  #retake:hover {{ box-shadow:0 5px 16px rgba(48,209,88,.45); }}
+  #use-photo {{
+    background:linear-gradient(135deg,#bf5af2,#da8fff);
+    color:#fff; border-radius:50px; padding:10px 18px;
+    box-shadow:0 3px 12px rgba(191,90,242,.3);
+  }}
+  #use-photo:hover {{ box-shadow:0 5px 16px rgba(191,90,242,.45); }}
+</style>
+</head>
+<body>
+<div id="cam-wrap">
+  <video id="vf" autoplay playsinline muted></video>
+  <div id="controls">
+    <button class="cam-btn" id="flip">🔄 Flip Camera</button>
+    <button class="cam-btn" id="shutter" disabled>📸 Capture</button>
+  </div>
+  <div id="preview-wrap">
+    <canvas id="snap"></canvas>
+    <div id="controls" style="display:flex;gap:8px;margin-top:8px;justify-content:center;">
+      <button class="cam-btn" id="retake">↩ Retake</button>
+      <button class="cam-btn" id="use-photo">✅ Use This Photo</button>
+    </div>
+  </div>
+  <div id="status">Initialising camera…</div>
+</div>
+<script>
+const BRIDGE = "{bridge_label}";
+const video  = document.getElementById('vf');
+const snapC  = document.getElementById('snap');
+const status = document.getElementById('status');
+const shutterBtn  = document.getElementById('shutter');
+const flipBtn     = document.getElementById('flip');
+const previewWrap = document.getElementById('preview-wrap');
+const retakeBtn   = document.getElementById('retake');
+const useBtn      = document.getElementById('use-photo');
+
+let facing = 'environment';   // start with back camera
+let stream = null;
+let capturedDataUrl = null;
+
+async function startCamera() {{
+  // ── Secure-context guard ──────────────────────────────────────────
+  if (!window.isSecureContext) {{
+    status.innerHTML =
+      '🔒 <b>HTTPS required for camera access.</b><br>' +
+      '<span style="font-size:.72rem;color:#bbb;">' +
+      'Run Streamlit with:<br>' +
+      '<code style="background:#222;padding:2px 6px;border-radius:4px;">' +
+      'streamlit run app.py --server.sslCertFile=cert.pem --server.sslKeyFile=key.pem' +
+      '</code><br>then open <b>https://</b>your-ip:8501 and accept the certificate warning.</span>';
+    return;
+  }}
+  // Stop any running stream
+  if (stream) {{
+    stream.getTracks().forEach(t => t.stop());
+  }}
+  shutterBtn.disabled = true;
+  status.textContent = 'Starting ' + (facing === 'user' ? 'front' : 'back') + ' camera…';
+  try {{
+    stream = await navigator.mediaDevices.getUserMedia({{
+      video: {{ facingMode: {{ ideal: facing }}, width: {{ ideal: 1920 }}, height: {{ ideal: 1080 }} }},
+      audio: false,
+    }});
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {{
+      shutterBtn.disabled = false;
+      status.textContent = (facing === 'user' ? '🤳 Front' : '📷 Back') + ' camera ready';
+    }};
+  }} catch (err) {{
+    // If back camera fails, try front
+    if (facing === 'environment') {{
+      facing = 'user';
+      return startCamera();
+    }}
+    let msg = '❌ Camera access denied.';
+    if (err.name === 'NotAllowedError') {{
+      msg += ' Tap the lock icon in your browser address bar and allow Camera.';
+    }} else if (err.name === 'NotFoundError') {{
+      msg += ' No camera found on this device.';
+    }} else {{
+      msg += ' ' + err.message;
+    }}
+    status.textContent = msg;
+    console.error(err);
+  }}
+}}
+
+flipBtn.addEventListener('click', () => {{
+  facing = facing === 'user' ? 'environment' : 'user';
+  // Hide preview, show video
+  previewWrap.style.display = 'none';
+  video.style.display = 'block';
+  shutterBtn.style.display = '';
+  flipBtn.style.display = '';
+  startCamera();
+}});
+
+shutterBtn.addEventListener('click', () => {{
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  snapC.width  = w;
+  snapC.height = h;
+  const ctx = snapC.getContext('2d');
+  ctx.drawImage(video, 0, 0, w, h);
+  capturedDataUrl = snapC.toDataURL('image/jpeg', 0.92);
+
+  // Show preview, hide video
+  video.style.display = 'none';
+  shutterBtn.style.display = 'none';
+  flipBtn.style.display = 'none';
+  previewWrap.style.display = 'flex';
+  previewWrap.style.flexDirection = 'column';
+  previewWrap.style.alignItems = 'center';
+  status.textContent = 'Photo captured — use it or retake.';
+}});
+
+retakeBtn.addEventListener('click', () => {{
+  capturedDataUrl = null;
+  previewWrap.style.display = 'none';
+  video.style.display = 'block';
+  shutterBtn.style.display = '';
+  flipBtn.style.display = '';
+  status.textContent = (facing === 'user' ? '🤳 Front' : '📷 Back') + ' camera ready';
+}});
+
+useBtn.addEventListener('click', () => {{
+  if (!capturedDataUrl) return;
+  status.textContent = '⏳ Sending photo to scanner…';
+  pushToStreamlit(capturedDataUrl);
+}});
+
+function pushToStreamlit(dataUrl) {{
+  try {{
+    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+    for (const inp of inputs) {{
+      if (inp.getAttribute('aria-label') === BRIDGE) {{
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype, 'value'
+        ).set;
+        nativeSetter.call(inp, dataUrl);
+        inp.focus();
+        inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        inp.blur();
+        return;
+      }}
+    }}
+    console.warn('[DocScan] Camera bridge input not found.');
+    status.textContent = '⚠ Bridge not found — try again.';
+  }} catch (err) {{
+    console.error('[DocScan] pushToStreamlit failed:', err);
+    status.textContent = '❌ Failed to send photo.';
+  }}
+}}
+
+startCamera();
+</script>
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Reset helper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -444,11 +671,40 @@ with st.sidebar:
     st.caption("CamScanner-quality scanning · OpenCV + Streamlit")
     st.divider()
 
-    uploaded_file = st.file_uploader(
-        "📁 Upload Document Photo",
-        type=["png", "jpg", "jpeg"],
-        help="Photo of a document on any background.",
+    input_source = st.radio(
+        "📥 Input Source",
+        ["📁 Upload File", "📷 Camera"],
+        index=0,
+        horizontal=True,
+        help="Choose to upload an existing photo or capture one with your camera.",
     )
+
+    uploaded_file = None
+    camera_data   = None
+
+    if input_source == "📁 Upload File":
+        uploaded_file = st.file_uploader(
+            "📁 Upload Document Photo",
+            type=["png", "jpg", "jpeg"],
+            help="Photo of a document on any background.",
+        )
+    else:
+        # ── Camera capture mode ──────────────────────────────────────────
+        # Hidden bridge input — camera JS writes the captured data-URL here.
+        camera_bridge_key = "camera_bridge"
+        cam_raw = st.text_input(
+            _CAMERA_BRIDGE_LABEL,
+            value="",
+            key=camera_bridge_key,
+            label_visibility="collapsed",
+        )
+
+        # Render the HTML camera widget
+        cam_html = _build_camera_html(_CAMERA_BRIDGE_LABEL)
+        components.html(cam_html, height=520, scrolling=False)
+
+        if cam_raw and cam_raw.startswith("data:image"):
+            camera_data = cam_raw
 
     st.divider()
 
@@ -482,13 +738,30 @@ with st.sidebar:
     st.caption("OpenCV · Streamlit · NumPy · Pillow")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Resolve image_bytes from upload or camera
+# ─────────────────────────────────────────────────────────────────────────────
+
+image_bytes = None
+
+if uploaded_file is not None:
+    image_bytes = uploaded_file.read()
+elif camera_data is not None:
+    # Decode data-URL → raw bytes
+    # Format: "data:image/jpeg;base64,/9j/4AAQ..."
+    try:
+        header, b64_body = camera_data.split(",", 1)
+        image_bytes = base64.b64decode(b64_body)
+    except Exception:
+        image_bytes = None
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Landing screen
 # ─────────────────────────────────────────────────────────────────────────────
 
-if uploaded_file is None:
+if image_bytes is None:
     st.markdown("# 📄 DocScan Pro")
     st.markdown("""
-    ### Upload a document photo in the sidebar to begin.
+    ### Upload a photo or capture one with your camera to begin.
 
     | Feature | Implementation |
     |---|---|
@@ -497,6 +770,7 @@ if uploaded_file is None:
     | 📐 Corner detection | Convex hull + approxPolyDP sweep + rectangularity score |
     | 🖼 Full-res warp | Corners detected on thumbnail; warp runs on original |
     | ✋ Draggable corners | HTML5 canvas — drag the coloured dots to adjust |
+    | 📷 Camera capture | Front & back camera with live viewfinder |
     | 🎨 6 filters | Original / Magic Colour / B&W / Grayscale / Sketch / Shadow |
     | ⚡ Speed | < 2 s on a standard laptop CPU |
     | 💾 Download | Full-resolution PNG |
@@ -504,14 +778,13 @@ if uploaded_file is None:
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Load file & reset state on new upload
+# Hash & reset state on new image
 # ─────────────────────────────────────────────────────────────────────────────
 
-image_bytes = uploaded_file.read()
-fhash       = file_hash(image_bytes)
+fhash = file_hash(image_bytes)
 
 if st.session_state.get("_last_fhash") != fhash:
-    # New file — clear bridge widget so it re-seeds from auto corners
+    # New image — clear bridge widget so it re-seeds from auto corners
     bridge_key = f"corner_bridge_{fhash[:12]}"
     if bridge_key in st.session_state:
         del st.session_state[bridge_key]
