@@ -726,7 +726,7 @@ with st.sidebar:
     corner_mode = st.radio(
         "Corner Selection",
         ["Auto", "Manual (drag)"],
-        index=1,
+        index=0,
         help=(
             "**Auto** — Auto corner detection.  \n"
             "**Manual** — drag the coloured dots on the canvas to fine-tune."
@@ -898,19 +898,65 @@ for col, (match_key, label, stage_key, is_mask, caption) in zip(tier_cols, TIER_
             unsafe_allow_html=True,
         )
 
+# ── Detection Tier Override ───────────────────────────────────────────────
+st.markdown("---")
+_TIER_OPTIONS = {
+    "🤖 Auto (use winner)": None,
+    "Tier 1 · LSD Lines":       "lsd_corners",
+    "Tier 2 · Closing Mask":    "closing_corners",
+    "Tier 3 · Flood-fill Mask": "floodfill_corners",
+    "Tier 4 · Edge Map":        "edge_corners",
+}
+
+tier_override_key = f"tier_override_{fhash[:12]}"
+tier_choice = st.radio(
+    "🔀 Override Detection Tier",
+    options=list(_TIER_OPTIONS.keys()),
+    index=0,
+    horizontal=True,
+    help=(
+        "**Auto** uses the winning tier from the cascade.  \n"
+        "Pick any other tier to force its corners for the warp, "
+        "even if it was not the auto-winner."
+    ),
+    key=tier_override_key,
+)
+
+corners_key = _TIER_OPTIONS[tier_choice]
+output_stages = stages   # default: auto-winner
+
+if corners_key is not None:
+    forced_corners = auto_stages.get(corners_key)
+    if forced_corners is not None:
+        with st.spinner(f"Warping with {tier_choice}…"):
+            output_stages = run_pipeline(
+                image_bytes, filter_name=filter_name,
+                manual_corners=forced_corners,
+            )
+        # Carry over the tier debug images from auto run (override only changes warp)
+        for k in ("lsd_vis","lsd_mask","closing_mask","floodfill_mask",
+                  "edge_map","shadow_free","clahe","original","winning_tier"):
+            output_stages[k] = auto_stages[k]
+        output_stages["_override_label"] = tier_choice
+    else:
+        st.warning(f"⚠️ {tier_choice} did not detect a valid quad — using auto winner.")
+
 # ── Row 3: Output ─────────────────────────────────────────────────────────
 st.markdown("---")
-cm = stages.get("corner_method", "—")
+cm = output_stages.get("corner_method", "—")
+override_note = output_stages.get("_override_label", "")
 r3a, r3b, r3c = st.columns(3)
 with r3a:
-    show_stage(stages["contour_vis"], "④ Detected Quad",
-               f"Winner: {cm}.")
+    label_suffix = f" *(overridden: {override_note})*" if override_note else ""
+    show_stage(output_stages["contour_vis"], "④ Detected Quad",
+               f"Corners: {cm}{label_suffix}.")
 with r3b:
-    show_stage(stages["warped"], "⑤ Perspective Warp",
+    show_stage(output_stages["warped"], "⑤ Perspective Warp",
                "Full-res four-point warp — before any enhancement filter.")
 with r3c:
-    show_stage(stages["enhanced"], "⑥ Enhanced Output",
+    show_stage(output_stages["enhanced"], "⑥ Enhanced Output",
                f"Full-res warp + {filter_name} filter.")
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -923,15 +969,15 @@ st.markdown("### Final Scan")
 out_col, info_col = st.columns([3, 2])
 
 with out_col:
-    st.image(bgr_to_pil(downsample_for_display(stages["enhanced"], 700)),
+    st.image(bgr_to_pil(downsample_for_display(output_stages["enhanced"], 700)),
              use_container_width=True)
 
 with info_col:
     # Download
-    h_px, w_px = stages["enhanced"].shape[:2]
+    h_px, w_px = output_stages["enhanced"].shape[:2]
     st.download_button(
         label=f"⬇️  Download  {w_px}×{h_px} PNG",
-        data=to_png_bytes(stages["enhanced"]),
+        data=to_png_bytes(output_stages["enhanced"]),
         file_name=f"docscan_{fhash[:8]}.png",
         mime="image/png",
         use_container_width=True,
@@ -941,8 +987,8 @@ with info_col:
 
     # Timing table
     st.markdown("#### ⏱ Stage Timings")
-    timings = stages.get("timings", {})
-    total   = stages.get("total_time", 0.0)
+    timings = output_stages.get("timings", {})
+    total   = output_stages.get("total_time", 0.0)
     max_ms  = max(timings.values(), default=1.0)
 
     label_map = {

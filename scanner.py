@@ -949,6 +949,7 @@ def run_pipeline(
         stages["lsd_vis"] = make_lsd_debug_vis(clahe_img)
         try:
             lsd_corners = find_corners_lsd(clahe_img)
+            stages["lsd_corners"] = lsd_corners   # None if failed
             if lsd_corners is not None:
                 lsd_mask = np.zeros((ph, pw), dtype=np.uint8)
                 pts = lsd_corners.reshape(4, 2).astype(np.int32)
@@ -960,43 +961,54 @@ def run_pipeline(
             else:
                 stages["lsd_mask"] = empty_mask
         except Exception:
-            stages["lsd_mask"] = empty_mask
+            stages["lsd_mask"]    = empty_mask
+            stages["lsd_corners"] = None
 
         # ── Tier 2: Segmentation — morphological closing ──────────────────
         # shadow_free is the correct input for segmentation tiers
         try:
             corners_a, mask_a = segment_document_closing(shadow_free)
-            stages["closing_mask"] = mask_a
+            stages["closing_mask"]    = mask_a
+            stages["closing_corners"] = corners_a   # None if failed
             if corners_proc is None and corners_a is not None:
                 corners_proc  = corners_a
                 corner_method = "seg-closing"
                 winning_tier  = "seg-closing"
         except Exception:
-            stages["closing_mask"] = empty_mask
+            stages["closing_mask"]    = empty_mask
+            stages["closing_corners"] = None
 
         # ── Tier 3: Segmentation — flood-fill background removal ──────────
         try:
             corners_c, mask_c = segment_document_floodfill(shadow_free)
-            stages["floodfill_mask"] = mask_c
+            stages["floodfill_mask"]    = mask_c
+            stages["floodfill_corners"] = corners_c   # None if failed
             if corners_proc is None and corners_c is not None:
                 corners_proc  = corners_c
                 corner_method = "seg-floodfill"
                 winning_tier  = "seg-floodfill"
         except Exception:
-            stages["floodfill_mask"] = empty_mask
+            stages["floodfill_mask"]    = empty_mask
+            stages["floodfill_corners"] = None
 
         # ── Tier 4: Edge-based fallback ───────────────────────────────────
         try:
             edges, edge_method = detect_edges(clahe_img)
             stages["edge_map"] = edges
+            corners_e: Optional[np.ndarray] = None
             if corners_proc is None:
                 corners_e = find_document_corners_edge_fallback(edges, resized.shape)
                 if corners_e is not None:
                     corners_proc  = corners_e
                     corner_method = f"edge-{edge_method}"
                     winning_tier  = "edge"
+            else:
+                # Still detect for the override option even if not needed for auto
+                corners_e = find_document_corners_edge_fallback(edges, resized.shape)
+            stages["edge_corners"] = corners_e
         except Exception:
-            stages["edge_map"] = empty_mask
+            stages["edge_map"]     = empty_mask
+            stages["edge_corners"] = None
 
         # ── Final fallback: whole-image corners ───────────────────────────
         if corners_proc is None or is_degenerate_quad(corners_proc, threshold=50):
