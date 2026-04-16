@@ -845,29 +845,73 @@ else:
 st.divider()
 st.markdown("### Pipeline Stages")
 
+# ── Row 1: Preprocessing ──────────────────────────────────────────────────
 r1a, r1b, r1c = st.columns(3)
 with r1a:
     show_stage(stages["original"], "① Original",
                "Raw upload — untouched full-resolution input.")
 with r1b:
     show_stage(stages["clahe"], "② CLAHE Normalised",
-               "L-channel CLAHE in LAB: flattens uneven lighting.")
+               "L-channel CLAHE in LAB colour space — flattens uneven lighting.")
 with r1c:
-    show_stage(stages["shadow_free"], "③ Shadow-Free",
-               "Dilate→MedianBlur→Divide removes shadows; bilateral suppresses text.")
+    show_stage(stages["shadow_free"], "③ Shadow Removed",
+               "Dilate→MedianBlur→Divide flattens shadows. Fed into segmentation tiers 2 & 3.")
 
-r2a, r2b, r2c = st.columns(3)
-with r2a:
-    cm = stages.get("corner_method", "—")
-    show_stage(stages["seg_mask"], "④ Segmentation Mask",
-               f"Method: {cm}. Closing+CC preferred; flood-fill & edge fallbacks.",
-               is_mask=True)
-with r2b:
-    show_stage(stages["contour_vis"], "⑤ Corner Detection",
-               f"Quad from segmentation mask ({cm}).")
-with r2c:
-    show_stage(stages["enhanced"], "⑥ Final Output",
-               f"Full-res perspective warp + {filter_name} filter.")
+# ── Detection Tiers ───────────────────────────────────────────────────────
+st.markdown("---")
+winning = stages.get("winning_tier", "none")
+
+# Each entry: (match_key, label, stage_key, is_mask, caption)
+TIER_ROWS = [
+    ("lsd",          "Tier 1 · LSD Lines",        "lsd_vis",        False,
+     "LSD on CLAHE grayscale — horizontal (blue), vertical (red) segments detected."),
+    ("seg-closing",  "Tier 2 · Closing Mask",      "closing_mask",   True,
+     "Shadow-free → Canny → morphClose → flood-fill → largest connected component."),
+    ("seg-floodfill","Tier 3 · Flood-fill Mask",   "floodfill_mask", True,
+     "Shadow-free → flood-fill from all 4 edges → invert → morphClose page mask."),
+    ("edge",         "Tier 4 · Edge Map",           "edge_map",       True,
+     "Bilateral-Canny / colour-seg / morph-gradient edge fallback on CLAHE image."),
+]
+
+
+def _tier_badge(match_key: str, winner: str) -> str:
+    hit = (winner == match_key) or (match_key == "edge" and winner.startswith("edge"))
+    if hit:
+        return ('<span style="background:#00c9a7;color:#000;font-weight:700;'
+                'font-size:.70rem;padding:2px 9px;border-radius:12px;">✅ Used</span>')
+    return ('<span style="background:#2a2a2a;color:#888;font-weight:600;'
+            'font-size:.70rem;padding:2px 9px;border-radius:12px;">⚫ Ran</span>')
+
+
+tier_cols = st.columns(4)
+for col, (match_key, label, stage_key, is_mask, caption) in zip(tier_cols, TIER_ROWS):
+    with col:
+        badge = _tier_badge(match_key, winning)
+        img_data = stages.get(stage_key,
+                               np.zeros((10, 10, 3), dtype=np.uint8))
+        st.image(bgr_to_pil(downsample_for_display(
+            cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR) if is_mask else img_data,
+            max_width=600)), use_container_width=True)
+        st.markdown(
+            f'<p class="stage-title">{label} {badge}</p>'
+            f'<p class="stage-caption">{caption}</p>',
+            unsafe_allow_html=True,
+        )
+
+# ── Row 3: Output ─────────────────────────────────────────────────────────
+st.markdown("---")
+cm = stages.get("corner_method", "—")
+r3a, r3b, r3c = st.columns(3)
+with r3a:
+    show_stage(stages["contour_vis"], "④ Detected Quad",
+               f"Winner: {cm}.")
+with r3b:
+    show_stage(stages["warped"], "⑤ Perspective Warp",
+               "Full-res four-point warp — before any enhancement filter.")
+with r3c:
+    show_stage(stages["enhanced"], "⑥ Enhanced Output",
+               f"Full-res warp + {filter_name} filter.")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Final result + download + timing

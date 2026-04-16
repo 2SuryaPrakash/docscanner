@@ -845,11 +845,39 @@ def draw_quad_on_image(image: np.ndarray, corners: np.ndarray,
     return vis
 
 
+def make_lsd_debug_vis(image: np.ndarray) -> np.ndarray:
+    """
+    Draw LSD-detected line segments on a copy of *image*.
+    Horizontal segments = blue (BGR 220,100,30), vertical = red (BGR 30,80,220).
+    Uses the same preprocessing as find_corners_lsd so the segments match
+    what the detector actually sees.
+    """
+    vis  = image.copy()
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (7, 7), 0)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    closed = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    lsd = cv2.createLineSegmentDetector(0)
+    lines_raw, _, _, _ = lsd.detect(closed)
+    if lines_raw is None or len(lines_raw) == 0:
+        return vis
+    for seg in lines_raw:
+        x1, y1, x2, y2 = (int(v) for v in seg[0])
+        color = (220, 100, 30) if abs(x2 - x1) >= abs(y2 - y1) else (30, 80, 220)
+        cv2.line(vis, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+    return vis
+
+
 def run_pipeline(
     image_bytes: bytes,
     filter_name: str = "Original",
     manual_corners: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
+    """
+    End-to-end pipeline.  ALL four detection tiers always run so that
+    their intermediate images can be displayed in the UI.
+    stages["winning_tier"] records which tier produced the final corners.
+    """
     stages: Dict[str, Any] = {}
     timings: Dict[str, float] = {}
     ok: Dict[str, bool] = {}
@@ -897,40 +925,94 @@ def run_pipeline(
     stages["shadow_free"] = shadow_free
     timings["shadow_remove"] = (time.perf_counter() - t) * 1000
 
-    # ── Unified detection: segmentation-first, edge fallback ──────────────
-    t = time.perf_counter()
-    ph, pw = resized.shape[:2]
+    # ── Detection: run ALL tiers, capture every intermediate ──────────────
+    ph, pw     = resized.shape[:2]
+    empty_mask = np.zeros((ph, pw), dtype=np.uint8)
+    corners_proc  = None
+    corner_method = ""
+    winning_tier  = "none"
+
+    t0_detect = time.perf_counter()
+
     if manual_corners is not None:
         corners_proc  = order_points(manual_corners.astype(np.float32))
         corner_method = "manual"
+        winning_tier  = "manual"
         ok["detection"] = True
-        # still produce a debug mask for display
-        debug_mask = np.zeros((ph, pw), dtype=np.uint8)
+        stages["lsd_vis"]        = make_lsd_debug_vis(clahe_img)
+        stages["lsd_mask"]       = empty_mask
+        stages["closing_mask"]   = empty_mask
+        stages["floodfill_mask"] = empty_mask
+        stages["edge_map"]       = empty_mask
     else:
+        # ── Tier 1: LSD line-segment detector ────────────────────────────
+        stages["lsd_vis"] = make_lsd_debug_vis(clahe_img)
         try:
-            corners_proc, debug_mask, corner_method = find_document_quad(
-                clahe_img
-            )
-            if corners_proc is None:
-                corners_proc   = fullimage_corners(ph, pw)
-                corner_method += " → full-image fallback"
-                ok["detection"] = False
-            elif is_degenerate_quad(corners_proc, threshold=50):
-                corners_proc   = fullimage_corners(ph, pw)
-                corner_method += " → full-image (degenerate)"
-                ok["detection"] = False
+            lsd_corners = find_corners_lsd(clahe_img)
+            if lsd_corners is not None:
+                lsd_mask = np.zeros((ph, pw), dtype=np.uint8)
+                pts = lsd_corners.reshape(4, 2).astype(np.int32)
+                cv2.fillPoly(lsd_mask, [pts], 255)
+                stages["lsd_mask"] = lsd_mask
+                corners_proc  = lsd_corners
+                corner_method = "lsd-lines"
+                winning_tier  = "lsd"
             else:
-                ok["detection"] = True
+                stages["lsd_mask"] = empty_mask
         except Exception:
-            corners_proc  = fullimage_corners(ph, pw)
-            corner_method = "full-image (exception)"
-            debug_mask    = np.zeros((ph, pw), dtype=np.uint8)
+            stages["lsd_mask"] = empty_mask
+
+        # ── Tier 2: Segmentation — morphological closing ──────────────────
+        # shadow_free is the correct input for segmentation tiers
+        try:
+            corners_a, mask_a = segment_document_closing(shadow_free)
+            stages["closing_mask"] = mask_a
+            if corners_proc is None and corners_a is not None:
+                corners_proc  = corners_a
+                corner_method = "seg-closing"
+                winning_tier  = "seg-closing"
+        except Exception:
+            stages["closing_mask"] = empty_mask
+
+        # ── Tier 3: Segmentation — flood-fill background removal ──────────
+        try:
+            corners_c, mask_c = segment_document_floodfill(shadow_free)
+            stages["floodfill_mask"] = mask_c
+            if corners_proc is None and corners_c is not None:
+                corners_proc  = corners_c
+                corner_method = "seg-floodfill"
+                winning_tier  = "seg-floodfill"
+        except Exception:
+            stages["floodfill_mask"] = empty_mask
+
+        # ── Tier 4: Edge-based fallback ───────────────────────────────────
+        try:
+            edges, edge_method = detect_edges(clahe_img)
+            stages["edge_map"] = edges
+            if corners_proc is None:
+                corners_e = find_document_corners_edge_fallback(edges, resized.shape)
+                if corners_e is not None:
+                    corners_proc  = corners_e
+                    corner_method = f"edge-{edge_method}"
+                    winning_tier  = "edge"
+        except Exception:
+            stages["edge_map"] = empty_mask
+
+        # ── Final fallback: whole-image corners ───────────────────────────
+        if corners_proc is None or is_degenerate_quad(corners_proc, threshold=50):
+            corners_proc   = fullimage_corners(ph, pw)
+            corner_method  = (corner_method + " → full-image fallback"
+                              if corner_method else "full-image fallback")
+            winning_tier   = "none"
             ok["detection"] = False
+        else:
+            ok["detection"] = True
+
+    timings["detection"] = (time.perf_counter() - t0_detect) * 1000
 
     stages["corners_proc"]  = corners_proc
     stages["corner_method"] = corner_method
-    stages["seg_mask"]      = debug_mask
-    timings["detection"] = (time.perf_counter() - t) * 1000
+    stages["winning_tier"]  = winning_tier
 
     try:
         stages["contour_vis"]    = draw_quad_on_image(resized.copy(), corners_proc)
