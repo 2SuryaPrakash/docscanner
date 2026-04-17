@@ -1,7 +1,4 @@
-"""
-scanner.py — All computer-vision logic for DocScan Pro.
-No Streamlit imports. Importable and testable in isolation.
-"""
+
 
 import cv2
 import itertools
@@ -56,8 +53,8 @@ def apply_clahe_normalisation(image: np.ndarray) -> np.ndarray:
 def normalize_illumination(image: np.ndarray) -> np.ndarray:
     """
     Flatten shadows and uneven lighting by dividing by a background estimate.
-    Steps: dilate to remove text → heavy median blur → divide original by
-    this smooth background → stretch contrast.
+    Steps: dilate to remove text - heavy median blur - divide original by
+    this smooth background - stretch contrast.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     dilated = cv2.dilate(gray, np.ones((7, 7), np.uint8))
@@ -78,11 +75,6 @@ def shadow_remove_for_segmentation(image: np.ndarray) -> np.ndarray:
     4. Divide original by background → flat illumination
     5. Strong bilateral filter to suppress residual text texture
     6. Return as BGR (so downstream functions that expect BGR still work)
-
-    Why cv2.divide instead of absdiff?
-      Shadows are multiplicative (they scale pixel values by a factor).
-      Division cancels this out perfectly; subtraction leaves residual
-      gradients.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -104,7 +96,6 @@ def shadow_remove_for_segmentation(image: np.ndarray) -> np.ndarray:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LSD-based corner detection (shadow-robust, gap-free)
-# Adapted from andrewdcampbell/OpenCV-Document-Scanner
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _filter_corners(corners: List[Tuple[int, int]],
@@ -145,12 +136,12 @@ def _get_lsd_corners(gray_img: np.ndarray) -> List[Tuple[int, int]]:
     segments that correspond to real structural edges (page boundaries)
     rather than text.
 
-    Pipeline (matching andrewdcampbell/OpenCV-Document-Scanner):
-    1. LSD on preprocessed grayscale → line segments
+    Pipeline:
+    1. LSD on preprocessed grayscale - line segments
     2. Separate into horizontal and vertical
     3. Draw each group onto a canvas, slightly extended
     4. Connected-components merge colinear segments
-    5. Top-2 per orientation → endpoints = candidate corners
+    5. Top-2 per orientation - endpoints = candidate corners
     6. Overlap of H and V canvases → additional intersection corners
     """
     h, w = gray_img.shape[:2]
@@ -224,7 +215,7 @@ def _get_lsd_corners(gray_img: np.ndarray) -> List[Tuple[int, int]]:
         corners.append((top_x, min_y))
         corners.append((bottom_x, max_y))
 
-    # Where horizontal and vertical lines overlap → additional corners
+    # Where horizontal and vertical lines overlap - additional corners
     overlap_y, overlap_x = np.where(
         (horizontal_canvas + vertical_canvas) == 2)
     corners += list(zip(overlap_x.tolist(), overlap_y.tolist()))
@@ -236,14 +227,6 @@ def _get_lsd_corners(gray_img: np.ndarray) -> List[Tuple[int, int]]:
 def find_corners_lsd(image: np.ndarray) -> Optional[np.ndarray]:
     """
     Detect document corners using LSD (Line Segment Detector).
-
-    Preprocessing matches the reference (andrewdcampbell/OpenCV-Document-Scanner):
-      gray → GaussianBlur(7,7) → morphClose(9,9) → LSD on this grayscale
-
-    Then: candidate corners from LSD → try C(n,4) quads → pick best valid.
-    Also tries direct contour detection from Canny edges as fallback.
-
-    Returns ordered (4,2) float32 corners or None.
     """
     h, w = image.shape[:2]
     image_area = float(h * w)
@@ -353,22 +336,12 @@ def detect_edges_morph_gradient(image: np.ndarray) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Segmentation-based document detection (Approach A & C)
+# Segmentation-based document detection 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def segment_document_closing(image: np.ndarray
                              ) -> Tuple[Optional[np.ndarray], np.ndarray]:
-    """
-    Approach A: Detect edges → aggressively close the EDGE MAP so that
-    text edges merge into a solid page blob → fill holes → largest
-    connected component → contour → quad.
-
-    Key insight: Otsu on grayscale fails when page and background have
-    similar brightness; edge closing works because edges fire on the page
-    boundary regardless of absolute brightness.
-
-    Returns (corners_or_None, debug_mask).
-    """
+    
     h, w = image.shape[:2]
     image_area = float(h * w)
 
@@ -420,15 +393,7 @@ def segment_document_closing(image: np.ndarray
 
 def segment_document_floodfill(image: np.ndarray
                                ) -> Tuple[Optional[np.ndarray], np.ndarray]:
-    """
-    Approach C: Flood-fill from many seed points along all 4 image edges
-    to robustly identify the background, then invert for document mask.
-
-    Uses bilateral filter to preserve the page boundary edge while
-    smoothing texture, and wider tolerance for better coverage.
-
-    Returns (corners_or_None, debug_mask).
-    """
+   
     h, w = image.shape[:2]
     image_area = float(h * w)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -614,7 +579,7 @@ def _approx_to_quad(contour: np.ndarray,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def detect_edges(image: np.ndarray) -> Tuple[np.ndarray, str]:
-    """Legacy edge detection — kept as fallback for find_document_quad."""
+    """ edge detection for find_document_quad."""
     h, w     = image.shape[:2]
     img_area = float(h * w)
     e_canny = detect_edges_canny(image)
@@ -848,7 +813,6 @@ def draw_quad_on_image(image: np.ndarray, corners: np.ndarray,
 def make_lsd_debug_vis(image: np.ndarray) -> np.ndarray:
     """
     Draw LSD-detected line segments on a copy of *image*.
-    Horizontal segments = blue (BGR 220,100,30), vertical = red (BGR 30,80,220).
     Uses the same preprocessing as find_corners_lsd so the segments match
     what the detector actually sees.
     """
@@ -1013,7 +977,7 @@ def run_pipeline(
         # ── Final fallback: whole-image corners ───────────────────────────
         if corners_proc is None or is_degenerate_quad(corners_proc, threshold=50):
             corners_proc   = fullimage_corners(ph, pw)
-            corner_method  = (corner_method + " → full-image fallback"
+            corner_method  = (corner_method + "  full-image fallback"
                               if corner_method else "full-image fallback")
             winning_tier   = "none"
             ok["detection"] = False

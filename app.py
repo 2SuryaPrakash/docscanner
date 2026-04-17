@@ -706,8 +706,6 @@ image_bytes = None
 if uploaded_file is not None:
     image_bytes = uploaded_file.read()
 elif camera_data is not None:
-    # Decode data-URL → raw bytes
-    # Format: "data:image/jpeg;base64,/9j/4AAQ..."
     try:
         header, b64_body = camera_data.split(",", 1)
         image_bytes = base64.b64decode(b64_body)
@@ -782,11 +780,9 @@ if corner_mode == "Manual (drag)":
             "The warp preview updates automatically after each drag."
         )
 
-    # Draggable canvas — returns current corners in processing space
     corners_proc = draggable_corner_editor(proc_image, auto_corners, file_key)
 
     # Re-run the pipeline with the dragged corners
-    # (not cached — corners change on every drag)
     with st.spinner("Warping…"):
         stages = run_pipeline(image_bytes, filter_name=filter_name,
                               manual_corners=corners_proc)
@@ -863,7 +859,7 @@ for col, (match_key, label, stage_key, is_mask, caption) in zip(tier_cols, TIER_
 # ── Detection Tier Override ───────────────────────────────────────────────
 st.markdown("---")
 _TIER_OPTIONS = {
-    "🤖 Auto (use winner)": None,
+    "Auto": None,
     "Tier 1 · LSD Lines":       "lsd_corners",
     "Tier 2 · Closing Mask":    "closing_corners",
     "Tier 3 · Flood-fill Mask": "floodfill_corners",
