@@ -1,8 +1,4 @@
-"""
-app.py — Streamlit UI for DocScanner..
-All CV logic lives in scanner.py.
-
-Run:  streamlit run app.py
+"""Run:  streamlit run app.py
 """
 
 import base64
@@ -110,11 +106,10 @@ def cached_auto_pipeline(fhash: str, image_bytes: bytes, filter_name: str) -> di
 # Draggable corner canvas
 # ─────────────────────────────────────────────────────────────────────────────
 
-# This label is the aria-label of the hidden Streamlit text_input that
-# bridges the JS canvas drag events back to Python.
+
 _BRIDGE_LABEL = "__docscan_corners__"
 
-# Bridge label for the camera capture component.
+
 _CAMERA_BRIDGE_LABEL = "__docscan_camera__"
 
 
@@ -314,18 +309,7 @@ canvas.addEventListener('touchmove',  onMove, {{ passive: false }});
 canvas.addEventListener('touchend',   onUp);
 
 /* ── Streamlit bridge ────────────────────────────────────────────────────── */
-/*
-  Strategy: find the hidden <input type="text"> in the parent Streamlit frame
-  whose aria-label matches BRIDGE.  Update its value using React's internal
-  native-input-value-setter (bypasses React's synthetic event batching that
-  would otherwise ignore programmatic .value assignments).  Then dispatch a
-  bubbling 'input' event so React's onChange fires, which updates Streamlit's
-  widget state and triggers a re-run.
 
-  This works because components.html() iframes share the same localhost
-  origin as the parent Streamlit app, so window.parent.document access
-  is permitted by the same-origin policy.
-*/
 function pushToStreamlit() {{
   const payload = JSON.stringify(corners);
   try {{
@@ -375,28 +359,7 @@ def draggable_corner_editor(
     default_corners: np.ndarray,
     file_key: str,
 ) -> np.ndarray:
-    """
-    Render a draggable HTML canvas over proc_image.
-    Returns the current corners in processing-image coordinate space.
-
-    Flow:
-      1. Read the bridge text_input from Streamlit widget state.
-         On the first render for a given file_key, widget state is empty, so
-         we seed it with the auto-detected corners via the `value=` param.
-         On subsequent re-runs (after a drag), widget state holds the
-         JS-updated corners and the `value=` param is IGNORED by Streamlit.
-
-      2. Parse the bridge string to get corners_proc.
-
-      3. Build canvas HTML using corners_proc so the canvas is always
-         initialised with whatever corners are current (not just auto).
-
-      4. Render the hidden bridge input, then the canvas iframe.
-         The input must appear in the DOM before the canvas iframe so the
-         JS can find it when pushToStreamlit() fires.
-
-      5. Return corners_proc for use by the warp pipeline.
-    """
+    
     ph, pw = proc_image.shape[:2]
 
     # Scale to at most 720px wide for the canvas
@@ -408,7 +371,6 @@ def draggable_corner_editor(
     bridge_key = f"corner_bridge_{file_key}"
     seed_json  = json.dumps(default_corners.tolist())
 
-    # IMPORTANT: `value=` here is only the DEFAULT (first render).
     # Once the key is in widget state (after JS updates), `value=` is ignored.
     raw_str = st.text_input(
         _BRIDGE_LABEL,               # aria-label — JS searches for this
@@ -1012,17 +974,17 @@ with info_col:
                  f'font-family:ui-monospace,monospace;">'
                  f'<span>{label}</span><span>{bar}<b>{ms:.1f} ms</b></span></div>')
 
-    speed_ok  = total < 1000
-    speed_col = "#00c9a7" if speed_ok else "#e53935"
-    speed_txt = "✓ under 1 s" if speed_ok else "✗ over 1 s"
-    st.markdown(
-        f'<div style="border:1px solid #2a2a2a;border-radius:8px;padding:12px;">'
-        f'{rows}'
-        f'<div style="margin-top:10px;font-weight:700;font-size:.95rem;'
-        f'color:{speed_col}">Total: {total:.0f} ms — {speed_txt}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    # speed_ok  = total < 1000
+    # speed_col = "#00c9a7" if speed_ok else "#e53935"
+    # speed_txt = "✓ under 1 s" if speed_ok else "✗ over 1 s"
+    # st.markdown(
+    #     f'<div style="border:1px solid #2a2a2a;border-radius:8px;padding:12px;">'
+    #     f'{rows}'
+    #     f'<div style="margin-top:10px;font-weight:700;font-size:.95rem;'
+    #     f'color:{speed_col}">Total: {total:.0f} ms — {speed_txt}</div>'
+    #     f'</div>',
+    #     unsafe_allow_html=True,
+    # )
 
     st.markdown("&nbsp;", unsafe_allow_html=True)
 
